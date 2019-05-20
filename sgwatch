@@ -1,0 +1,138 @@
+#!/usr/bin/python3
+#	sgwatch - Watch savegames and create backups
+#	Copyright (C) 2019-2019 Johannes Bauer
+#
+#	This file is part of sgwatch.
+#
+#	sgwatch is free software; you can redistribute it and/or modify
+#	it under the terms of the GNU General Public License as published by
+#	the Free Software Foundation; this program is ONLY licensed under
+#	version 3 of the License, later versions are explicitly excluded.
+#
+#	sgwatch is distributed in the hope that it will be useful,
+#	but WITHOUT ANY WARRANTY; without even the implied warranty of
+#	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#	GNU General Public License for more details.
+#
+#	You should have received a copy of the GNU General Public License
+#	along with sgwatch; if not, write to the Free Software
+#	Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+#
+#	Johannes Bauer <JohannesBauer@gmx.de>
+
+import os
+import sys
+import json
+import hashlib
+import re
+import contextlib
+import datetime
+import time
+import shutil
+
+class SavegameWatcher(object):
+	def __init__(self, config_filename):
+		with open(config_filename) as f:
+			self._config = json.load(f)
+		self._src_dir = os.path.realpath(os.path.expanduser(self._config["directory"]))
+		self._dst_dir = os.path.realpath(self._config["name"])
+		with contextlib.suppress(FileExistsError):
+			os.makedirs(self._dst_dir)
+		self._regex = re.compile(self._config["regex"])
+		self._sgconfig = self._read_sgconfig()
+		self._sghashes = set(savegame["hash"] for savegame in self._sgconfig)
+		self._sgmtimes = set(savegame["mtime"] for savegame in self._sgconfig)
+
+	def _read_sgconfig(self):
+		filename = self._dst_dir + "/savegames.json"
+		try:
+			with open(filename) as f:
+				return json.load(f)
+		except FileNotFoundError:
+			return [ ]
+
+	def _write_sgconfig(self):
+		filename = self._dst_dir + "/savegames.json"
+		with open(filename, "w") as f:
+			json.dump(self._sgconfig, f)
+
+	@staticmethod
+	def _hashfile(filename):
+		with open(filename, "rb") as f:
+			return hashlib.md5(f.read()).hexdigest()
+
+	@staticmethod
+	def _mtime(filename):
+		mtime = os.stat(filename).st_mtime
+		mtime_fract = round(1000000 * (mtime % 1))
+		mtime = int(mtime)
+		mtime_ts = datetime.datetime.utcfromtimestamp(mtime).strftime("%Y-%m-%dT%H:%M:%S.") + "%06dZ" % (mtime_fract)
+		return mtime_ts
+
+	def get_savegames(self):
+		savegames = [ ]
+		for filename in os.listdir(self._src_dir):
+			full_filename = self._src_dir + "/" + filename
+			result = self._regex.fullmatch(filename)
+			if result is not None:
+				result = result.groupdict()
+				mtime_ts = self._mtime(full_filename)
+				savegame = {
+					"filename":	filename,
+					"meta": result,
+					"mtime": mtime_ts,
+				}
+				savegames.append(savegame)
+		savegames.sort(key = lambda x: (x["mtime"], x["filename"]))
+		return savegames
+
+	def get_new_savegames(self):
+		savegames = self.get_savegames()
+		potentially_new = [ savegame for savegame in savegames if savegame["mtime"] not in self._sgmtimes ]
+		for savegame in potentially_new:
+			full_filename = self._src_dir + "/" + savegame["filename"]
+			savegame["hash"] = self._hashfile(full_filename)
+
+		new_savegames = [ savegame for savegame in potentially_new if savegame["hash"] not in self._sghashes ]
+		return new_savegames
+
+	def _is_stable(self, savegame, waittime = 5.0):
+		time.sleep(waittime)
+		full_filename = self._src_dir + "/" + savegame["filename"]
+		now_mtime = self._mtime(full_filename)
+		now_hash = self._hashfile(full_filename)
+		return (savegame["mtime"] == now_mtime) and (savegame["hash"] == now_hash)
+
+	def _find_outfile(self, savegame):
+		for i in range(1000):
+			if i == 0:
+				outfile = "%s/%s.sav" % (self._dst_dir, savegame["mtime"])
+			else:
+				outfile = "%s/%s_%04d.sav" % (self._dst_dir, savegame["mtime"], i)
+			if not os.path.isfile(outfile):
+				return outfile
+		assert(False)
+
+	def _add_savegame(self, savegame):
+		full_filename = self._src_dir + "/" + savegame["filename"]
+		self._sgmtimes.add(savegame["mtime"])
+		self._sghashes.add(savegame["hash"])
+		outfile = self._find_outfile(savegame)
+		savegame["storage"] = os.path.basename(outfile)
+		print("New savegame: %s (%s)" % (savegame["filename"], savegame["mtime"]))
+		shutil.copy(full_filename, outfile)
+		self._sgconfig.append(savegame)
+		self._write_sgconfig()
+
+	def watch(self):
+		while True:
+			savegames = self.get_new_savegames()
+			for savegame in savegames:
+				if self._is_stable(savegame):
+					self._add_savegame(savegame)
+			time.sleep(1)
+
+config_filename = sys.argv[1]
+sgwatch = SavegameWatcher(config_filename)
+sgwatch.watch()
+

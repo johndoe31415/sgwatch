@@ -1,0 +1,6 @@
+{
+	"directory": "~/.config/unity3d/AtomTeam/Atom",
+	"regex": "Save_(?P<sgno>-?\\d+)_v10.as",
+	"name": "atom_rpg",
+	"restore": "Save_0_v10.as"
+}

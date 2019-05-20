@@ -1,0 +1,59 @@
+#!/usr/bin/python3
+#	sgwatch - Watch savegames and create backups
+#	Copyright (C) 2019-2019 Johannes Bauer
+#
+#	This file is part of sgwatch.
+#
+#	sgwatch is free software; you can redistribute it and/or modify
+#	it under the terms of the GNU General Public License as published by
+#	the Free Software Foundation; this program is ONLY licensed under
+#	version 3 of the License, later versions are explicitly excluded.
+#
+#	sgwatch is distributed in the hope that it will be useful,
+#	but WITHOUT ANY WARRANTY; without even the implied warranty of
+#	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#	GNU General Public License for more details.
+#
+#	You should have received a copy of the GNU General Public License
+#	along with sgwatch; if not, write to the Free Software
+#	Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+#
+#	Johannes Bauer <JohannesBauer@gmx.de>
+
+import os
+import sys
+import json
+import datetime
+import pytz
+import tzlocal
+import shutil
+
+local_zone = tzlocal.get_localzone()
+
+config_filename = sys.argv[1]
+with open(config_filename) as f:
+	config = json.load(f)
+
+sgconfig_filename = config["name"] + "/savegames.json"
+with open(sgconfig_filename) as f:
+	sgconfig = json.load(f)
+
+now = datetime.datetime.utcnow()
+recent_savegames = list(reversed(sgconfig[-20:]))
+for (sid, savegame) in enumerate(recent_savegames, 1):
+	mtime = datetime.datetime.strptime(savegame["mtime"][:18], "%Y-%m-%dT%H:%M:%S")
+	local_mtime = local_zone.fromutc(mtime)
+	timestamp = local_mtime.strftime("%d.%m.%Y %H:%M:%S")
+	tdiff = round((now - mtime).total_seconds())
+	if tdiff >= 86400:
+		tdiff_str = "%d-%d:%02d d-h:m" % (tdiff / 86400, tdiff % 86400 // 3600, tdiff % 86400 % 3600 // 60)
+	else:
+		tdiff_str = "%d:%02d h:m" % (tdiff % 86400 // 3600, tdiff % 86400 % 3600 // 60)
+	print("%2d) %-15s %-20s %s" % (sid, savegame["filename"], timestamp, tdiff_str))
+restore_no = int(input("Restore: "))
+restore = recent_savegames[restore_no - 1]
+
+infilename = config["name"] + "/" + restore["storage"]
+outfilename = os.path.realpath(os.path.expanduser(config["directory"]) + "/" + config["restore"])
+print("%s -> %s" % (infilename, outfilename))
+shutil.copy(infilename, outfilename)
