@@ -29,8 +29,12 @@ import contextlib
 import datetime
 import time
 import shutil
+import collections
 
 class SavegameWatcher(object):
+	_StoredSavegame = collections.namedtuple("StoredSavegame", [ "filename", "age", "size" ])
+	_STORED_SAVEGAME_REGEX = re.compile(r"(?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2})T(?P<hour>\d{2}):(?P<minute>\d{2}):(?P<second>\d{2})\.(?P<micros>\d{6})Z\.sav")
+
 	def __init__(self, config_filename):
 		with open(config_filename) as f:
 			self._config = json.load(f)
@@ -124,15 +128,65 @@ class SavegameWatcher(object):
 		self._sgconfig.append(savegame)
 		self._write_sgconfig()
 
+	def _list_stored_savegames(self):
+		for filename in os.listdir(self._dst_dir):
+			match = self._STORED_SAVEGAME_REGEX.fullmatch(filename)
+			if match is not None:
+				match = match.groupdict()
+				age = datetime.datetime(int(match["year"]), int(match["month"]), int(match["day"]), int(match["hour"]), int(match["minute"]), int(match["second"]), int(match["micros"]))
+				size = os.stat(self._dst_dir + "/" + filename).st_size
+				yield self._StoredSavegame(filename = filename, age = age, size = size)
+
+	def prune(self):
+		stored_savegames = list(self._list_stored_savegames())
+
+		# Newest savegames first
+		stored_savegames.sort(key = lambda sg: sg.age, reverse = True)
+
+		# This is the bare minimum, can only increase from this point on
+		# Criterion 1: Minimally keep this amount of savegames
+		protected_savegames = self._config["prune"]["keep_savegames"]
+
+		# Criterion 2: Minimally keep this size on disk
+		protected_size_bytes = self._config["prune"]["keep_less_than_mib"] * 1024 * 1024
+		protected_savegames_by_size = 0
+		total_size = 0
+		for savegame in stored_savegames:
+			total_size += savegame.size
+			if total_size > protected_size_bytes:
+				break
+			protected_savegames_by_size += 1
+		protected_savegames = max(protected_savegames, protected_savegames_by_size)
+
+		# Criterion 3: Protect by age
+		protected_age = datetime.datetime.utcnow() - datetime.timedelta(0, self._config["prune"]["keep_younger_than_secs"])
+		protected_savegames_by_age = 0
+		for savegame in stored_savegames:
+			if savegame.age < protected_age:
+				break
+			protected_savegames_by_age += 1
+		protected_savegames = max(protected_savegames, protected_savegames_by_age)
+
+		if protected_savegames >= len(stored_savegames):
+			# Not deleting anything
+			return
+
+		deleting_savegame_count = len(stored_savegames) - protected_savegames
+		print("Protecting %d savegames (%d generally, %d by size and %d by age). Deleting %d of %d." % (protected_savegames, self._config["prune"]["keep_savegames"], protected_savegames_by_size, protected_savegames_by_age, deleting_savegame_count, len(stored_savegames)))
+		for savegame in stored_savegames[protected_savegames:]:
+			os.unlink(self._dst_dir + "/" + savegame.filename)
+
 	def watch(self):
 		while True:
 			savegames = self.get_new_savegames()
 			for savegame in savegames:
 				if self._is_stable(savegame):
 					self._add_savegame(savegame)
+					self.prune()
 			time.sleep(1)
 
 config_filename = sys.argv[1]
 sgwatch = SavegameWatcher(config_filename)
+sgwatch.prune()
 sgwatch.watch()
 

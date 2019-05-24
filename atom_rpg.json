@@ -2,5 +2,10 @@
 	"directory": "~/.config/unity3d/AtomTeam/Atom",
 	"regex": "Save_(?P<sgno>-?\\d+)_v10.as",
 	"name": "atom_rpg",
-	"restore": "Save_0_v10.as"
+	"restore": "Save_0_v10.as",
+	"prune": {
+		"keep_savegames":			40,
+		"keep_younger_than_secs":	604800,
+		"keep_less_than_mib":		200
+	}
 }
