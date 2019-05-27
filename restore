@@ -39,7 +39,7 @@ with open(sgconfig_filename) as f:
 	sgconfig = json.load(f)
 
 now = datetime.datetime.utcnow()
-recent_savegames = list(reversed(sgconfig[-20:]))
+recent_savegames = list(reversed(sgconfig))
 for (sid, savegame) in enumerate(recent_savegames, 1):
 	mtime = datetime.datetime.strptime(savegame["mtime"][:18], "%Y-%m-%dT%H:%M:%S")
 	local_mtime = local_zone.fromutc(mtime)
@@ -50,6 +50,9 @@ for (sid, savegame) in enumerate(recent_savegames, 1):
 	else:
 		tdiff_str = "%d:%02d h:m" % (tdiff % 86400 // 3600, tdiff % 86400 % 3600 // 60)
 	print("%2d) %-15s %-20s %s" % (sid, savegame["filename"], timestamp, tdiff_str))
+	if sid == 20:
+		print("[...]")
+		break
 restore_no = int(input("Restore: "))
 restore = recent_savegames[restore_no - 1]
 
