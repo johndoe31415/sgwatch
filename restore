@@ -39,8 +39,7 @@ with open(sgconfig_filename) as f:
 	sgconfig = json.load(f)
 
 now = datetime.datetime.utcnow()
-recent_savegames = list(reversed(sgconfig))
-for (sid, savegame) in enumerate(recent_savegames, 1):
+for (sid, savegame) in enumerate(reversed(sgconfig), 1):
 	mtime = datetime.datetime.strptime(savegame["mtime"][:18], "%Y-%m-%dT%H:%M:%S")
 	local_mtime = local_zone.fromutc(mtime)
 	timestamp = local_mtime.strftime("%d.%m.%Y %H:%M:%S")
@@ -49,14 +48,20 @@ for (sid, savegame) in enumerate(recent_savegames, 1):
 		tdiff_str = "%d-%d:%02d d-h:m" % (tdiff / 86400, tdiff % 86400 // 3600, tdiff % 86400 % 3600 // 60)
 	else:
 		tdiff_str = "%d:%02d h:m" % (tdiff % 86400 // 3600, tdiff % 86400 % 3600 // 60)
-	print("%2d) %-15s %-20s %s" % (sid, savegame["filename"], timestamp, tdiff_str))
+	print("%2d) %-15s %-20s %s %s" % (sid, savegame["filename"], timestamp, tdiff_str, savegame.get("name", "")))
 	if sid == 20:
 		print("[...]")
 		break
-restore_no = int(input("Restore: "))
-restore = recent_savegames[restore_no - 1]
+restore_no_str = input("Restore: ")
+restore_no = int(restore_no_str) - 1
+savegame = sgconfig[(len(sgconfig) - 1) - restore_no]
+if restore_no_str.startswith("+"):
+	name = input("Name: ")
+	savegame["name"] = name
+	with open(sgconfig_filename, "w") as f:
+		json.dump(sgconfig, f)
 
-infilename = config["name"] + "/" + restore["storage"]
+infilename = config["name"] + "/" + savegame["storage"]
 outfilename = os.path.realpath(os.path.expanduser(config["directory"]) + "/" + config["restore"])
 print("%s -> %s" % (infilename, outfilename))
 shutil.copy(infilename, outfilename)

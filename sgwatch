@@ -43,22 +43,43 @@ class SavegameWatcher(object):
 		with contextlib.suppress(FileExistsError):
 			os.makedirs(self._dst_dir)
 		self._regex = re.compile(self._config["regex"])
-		self._sgconfig = self._read_sgconfig()
-		self._sghashes = set(savegame["hash"] for savegame in self._sgconfig)
-		self._sgmtimes = set(savegame["mtime"] for savegame in self._sgconfig)
+		self._sgconfig = None
+		self._sghashes = None
+		self._sgmtimes = None
+		self._sgmtime = None
+		self._update_sgconfig()
+
+	def _update_sgconfig(self):
+		filename = self._dst_dir + "/savegames.json"
+		current_mtime = self._get_mtime(filename)
+		if (self._sgmtime is None) or (self._sgconfig is None) or (current_mtime > self._sgmtime):
+			self._read_sgconfig()
+
+	@staticmethod
+	def _get_mtime(filename):
+		try:
+			return os.stat(filename).st_mtime
+		except FileNotFoundError:
+			return 0
 
 	def _read_sgconfig(self):
+		print("Reading savegame configuration...")
 		filename = self._dst_dir + "/savegames.json"
 		try:
+			mtime = self._get_mtime(filename)
 			with open(filename) as f:
-				return json.load(f)
+				content = json.load(f)
+			(self._sgmtime, self._sgconfig) = (mtime, content)
 		except FileNotFoundError:
-			return [ ]
+			(self._sgmtime, self._sgconfig) = (0, [ ])
+		self._sghashes = set(savegame["hash"] for savegame in self._sgconfig)
+		self._sgmtimes = set(savegame["mtime"] for savegame in self._sgconfig)
 
 	def _write_sgconfig(self):
 		filename = self._dst_dir + "/savegames.json"
 		with open(filename, "w") as f:
 			json.dump(self._sgconfig, f)
+		self._sgmtime = self._get_mtime(filename)
 
 	@staticmethod
 	def _hashfile(filename):
@@ -125,6 +146,7 @@ class SavegameWatcher(object):
 		savegame["storage"] = os.path.basename(outfile)
 		print("New savegame: %s (%s)" % (savegame["filename"], savegame["mtime"]))
 		shutil.copy(full_filename, outfile)
+		self._update_sgconfig()
 		self._sgconfig.append(savegame)
 		self._write_sgconfig()
 
