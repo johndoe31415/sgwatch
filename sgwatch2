@@ -1,0 +1,156 @@
+#!/usr/bin/python3
+#	sgwatch - Watch savegames and create backups
+#	Copyright (C) 2019-2020 Johannes Bauer
+#
+#	This file is part of sgwatch.
+#
+#	sgwatch is free software; you can redistribute it and/or modify
+#	it under the terms of the GNU General Public License as published by
+#	the Free Software Foundation; this program is ONLY licensed under
+#	version 3 of the License, later versions are explicitly excluded.
+#
+#	sgwatch is distributed in the hope that it will be useful,
+#	but WITHOUT ANY WARRANTY; without even the implied warranty of
+#	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#	GNU General Public License for more details.
+#
+#	You should have received a copy of the GNU General Public License
+#	along with sgwatch; if not, write to the Free Software
+#	Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+#
+#	Johannes Bauer <JohannesBauer@gmx.de>
+
+import sys
+import os
+import json
+import time
+import importlib
+import contextlib
+import datetime
+from FriendlyArgumentParser import FriendlyArgumentParser
+
+parser = FriendlyArgumentParser(description = "Backup savegames.")
+parser.add_argument("-b", "--backup-dir", metavar = "path", default = "savegame-backups", help = "Subdirectory in which to look for savegame files. Defaults to %(default)s.")
+parser.add_argument("--no-prune", action = "store_true", help = "Do not ever prune savegame database.")
+parser.add_argument("--check-interval", metavar = "secs", type = float, default = 3, help = "Check this number of seconds for new savegames. Defaults to %(default).1f secs.")
+parser.add_argument("--stabilization-interval", metavar = "secs", type = float, default = 3, help = "Check this number of seconds for new savegames. Defaults to %(default).1f secs.")
+parser.add_argument("-v", "--verbose", action = "count", default = 0, help = "Increases verbosity. Can be specified multiple times to increase.")
+parser.add_argument("action_json", metavar = "action_json", type = str, help = "Game-specific configuration file that indicates on how backups need to be performed.")
+args = parser.parse_args(sys.argv[1:])
+
+class SavegameBackup():
+	def __init__(self, args):
+		self._args = args
+		with open(self._args.action_json) as f:
+			self._config = json.load(f)
+		self._savedir = os.path.realpath(self._args.backup_dir + "/" + self._config["name"])
+		if not self._savedir.endswith("/"):
+			self._savedir += "/"
+		self._toc_filename = self._savedir + "toc.json"
+		with contextlib.suppress(FileExistsError):
+			os.makedirs(self._savedir)
+		try:
+			with open(self._toc_filename) as f:
+				self._toc = json.load(f)
+		except FileNotFoundError:
+			self._toc = [ ]
+			self._save_toc()
+		self._source = self._instanciate_source()
+		self._archived_quickhashes = set(bytes.fromhex(entry["quickhash"]) for entry in self._toc)
+		self._archived_slowhashes = set(bytes.fromhex(entry["slowhash"]) for entry in self._toc)
+
+	def _instanciate_source(self):
+		name = self._config["source"]["type"]
+		module = importlib.import_module(name)
+		srcclass = getattr(module, name)
+		instance = srcclass(self._config["source"])
+		return instance
+
+	def _save_toc(self):
+		new_toc_filename = self._toc_filename + ".new"
+		with open(new_toc_filename, "w") as f:
+			json.dump(self._toc, f)
+		os.rename(new_toc_filename, self._toc_filename)
+
+	def _add_toc_entry(self, toc_entry):
+		self._toc.append(toc_entry)
+		self._save_toc()
+
+	def prune(self):
+		if not self._args.no_prune:
+			return
+		# TODO: prune
+
+	def _have_archived_quickhash(self, hashval):
+		return hashval in self._archived_quickhashes
+
+	def _have_archived_slowhash(self, hashval):
+		return hashval in self._archived_slowhashes
+
+	def _wait_stabilization(self, savegame, ref_quickhash, ref_slowhash):
+		print("Waiting for stabilization: %s" % (savegame))
+		time.sleep(self._args.stabilization_interval)
+		now_quickhash = savegame.quickhash()
+		if now_quickhash != ref_quickhash:
+			print("Savegame changed quickhash")
+			return False
+		now_slowhash = savegame.slowhash()
+		if now_slowhash != ref_slowhash:
+			print("Savegame changed slowhash")
+			return False
+		return True
+
+	def _find_free_filename(self, path, prefix, suffix):
+		for i in range(1000):
+			if i == 0:
+				filename = prefix + suffix
+			else:
+				filename = prefix + ("_%04d" % (i)) + suffix
+			if not os.path.exists(path + filename):
+				return filename
+		raise Exception("No free filename found in: %s" % (path))
+
+	def _archive(self, savegame, quickhash, slowhash):
+		self._archived_quickhashes.add(quickhash)
+		self._archived_slowhashes.add(slowhash)
+		now = datetime.datetime.utcnow()
+		mtime = savegame.mtime
+		mtime_ts = datetime.datetime.utcfromtimestamp(mtime)
+		archive_filename = self._find_free_filename(self._savedir, mtime_ts.strftime("%Y_%m_%d_%H_%M_%S"), ".tar.gz")
+		full_archive_filename = self._savedir + archive_filename
+
+		print("Archiving: %s as %s" % (savegame, archive_filename))
+		savegame.store(full_archive_filename)
+
+		self._add_toc_entry({
+			"mtime":		mtime,
+			"filename":		archive_filename,
+			"arctime":		time.time(),
+			"quickhash":	quickhash.hex(),
+			"slowhash":		slowhash.hex(),
+		})
+
+	def check_savegames(self):
+		for savegame in self._source.find():
+			if not savegame.satisfied:
+				# Maybe not all files present for it
+				continue
+			quickhash = savegame.quickhash()
+			if self._have_archived_quickhash(quickhash):
+				continue
+			slowhash = savegame.slowhash()
+			if self._have_archived_slowhash(slowhash):
+				self._archived_quickhashes.add(quickhash)
+				continue
+			stable = self._wait_stabilization(savegame, quickhash, slowhash)
+			if stable:
+				self._archive(savegame, quickhash, slowhash)
+
+	def run(self):
+		while True:
+			self.check_savegames()
+			time.sleep(self._args.check_interval)
+
+sgbackup = SavegameBackup(args)
+sgbackup.prune()
+sgbackup.run()

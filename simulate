@@ -1,0 +1,46 @@
+#!/usr/bin/python3
+
+import sys
+import os
+import time
+import random
+import contextlib
+from FriendlyArgumentParser import FriendlyArgumentParser
+
+parser = FriendlyArgumentParser(description = "Simulate creation of specific types of savegames.")
+parser.add_argument("-t", "--timing", metavar = "secs", type = float, default = 1.0, help = "Slow down creation of savegame file by this much, in seconds per created file. Defaults to %(default).1f secs.")
+parser.add_argument("-n", "--number", metavar = "count", type = int, default = 1, help = "Number of savegames to create. Defaults to %(default)d.")
+parser.add_argument("-s", "--sg-type", choices = [ "single" ], default = "single", help = "Type of savegame to create. Can be one of %(choices)s, default to %(default)s.")
+parser.add_argument("-o", "--outdir", metavar = "path", default = "sgdir", help = "Output dir to write simulated savegames into. Defaults to %(default)s.")
+args = parser.parse_args(sys.argv[1:])
+
+class SGSimulator():
+	def __init__(self, args):
+		self._args = args
+		self._outdir = self._args.outdir + "/" + self._args.sg_type + "/"
+		self._chunk = os.urandom(random.randint(500, 1500))
+
+	def _mkfile(self, filename):
+		with contextlib.suppress(FileExistsError):
+			os.makedirs(os.path.dirname(filename))
+		slicecount = round(self._args.timing * 10)
+		if slicecount < 1:
+			slicecount = 1
+		slicetime = self._args.timing / slicecount
+		print("Creating %s in %d slices of %.1f sec each (%.1f sec total)." % (filename, slicecount, slicetime, self._args.timing))
+		with open(filename, "wb") as f:
+			for i in range(slicecount):
+				f.write(self._chunk)
+				time.sleep(slicetime)
+
+	def _handle_single(self):
+		filename = self._outdir + "save_%06d.sav" % (random.randint(0, 999999))
+		self._mkfile(filename)
+
+	def run(self):
+		handler = getattr(self, "_handle_" + self._args.sg_type)
+		for i in range(self._args.number):
+			handler()
+
+sim = SGSimulator(args)
+sim.run()

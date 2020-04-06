@@ -1,0 +1,13 @@
+{
+	"name": "example_single",
+	"source": {
+		"type": "SourceSingleFile",
+		"source": [ "sgdir/single", "save_(?P<sgid>\\d+)\\.sav" ],
+		"restore": "sgdir/single/autosave.sav"
+	},
+	"prune": {
+		"keep_savegames":			40,
+		"keep_younger_than_secs":	604800,
+		"keep_less_than_mib":		200
+	}
+}
